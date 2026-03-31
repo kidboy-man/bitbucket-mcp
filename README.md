@@ -1,0 +1,143 @@
+# bitbucket-mcp
+
+A Go MCP (Model Context Protocol) server that exposes Bitbucket Cloud pull request operations as tools to Claude. It allows Claude to fetch PR diffs, read existing comments, and post inline review comments — without requiring credentials in every conversation.
+
+## How it works
+
+The server communicates over **stdio using JSON-RPC 2.0**, the standard MCP transport. Claude Desktop (or any MCP-compatible client) spawns the binary and communicates via stdin/stdout.
+
+## Prerequisites
+
+- Go 1.22+
+- A Bitbucket Cloud account
+- A [Bitbucket App Password](https://bitbucket.org/account/settings/app-passwords) with:
+  - `Repositories: Read`
+  - `Pull requests: Read` and `Write`
+
+## Installation
+
+```bash
+git clone https://github.com/kidboy-man/bitbucket-mcp.git
+cd bitbucket-mcp
+make build
+```
+
+This produces a `bitbucket-mcp` binary in the project root.
+
+## Configuration
+
+Set the following environment variables before running:
+
+| Variable | Description |
+|---|---|
+| `BITBUCKET_WORKSPACE` | Your Bitbucket workspace slug |
+| `BITBUCKET_USERNAME` | Your Bitbucket account username |
+| `BITBUCKET_APP_PASSWORD` | Your Bitbucket App Password |
+
+## Usage
+
+### Run manually
+
+```bash
+BITBUCKET_WORKSPACE=mycompany \
+BITBUCKET_USERNAME=myuser \
+BITBUCKET_APP_PASSWORD=mypassword \
+./bitbucket-mcp
+```
+
+Or via Make:
+
+```bash
+BITBUCKET_WORKSPACE=mycompany \
+BITBUCKET_USERNAME=myuser \
+BITBUCKET_APP_PASSWORD=mypassword \
+make run
+```
+
+### Integrate with Claude Desktop
+
+Add the following to `~/.claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "bitbucket": {
+      "command": "/absolute/path/to/bitbucket-mcp",
+      "env": {
+        "BITBUCKET_WORKSPACE": "your-workspace",
+        "BITBUCKET_USERNAME": "your-username",
+        "BITBUCKET_APP_PASSWORD": "your-app-password"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop after editing. The three tools will appear automatically in every conversation.
+
+## Available Tools
+
+### `get_pr`
+
+Fetches a PR's metadata, structured diff, and commits.
+
+```json
+{ "pr_url": "https://bitbucket.org/workspace/repo/pull-requests/42" }
+```
+
+Returns:
+- `pr` — id, title, description, author, branches, state, commits
+- `diff` — files with hunks; each line includes `diff_position`, `old_line_no`, `new_line_no`, `type`, and `content`
+- `note` — reminder to use `diff_position` (not `new_line_no`) when posting comments
+
+### `list_pr_comments`
+
+Lists existing inline comments on a PR to avoid duplicates.
+
+```json
+{ "pr_url": "https://bitbucket.org/workspace/repo/pull-requests/42" }
+```
+
+Returns an array of comments with id, body, file, line, author, and created_on.
+
+### `post_inline_comment`
+
+Posts an inline review comment anchored to a specific diff position.
+
+```json
+{
+  "pr_url":        "https://bitbucket.org/workspace/repo/pull-requests/42",
+  "file":          "internal/handler/user.go",
+  "diff_position": 4,
+  "body":          "Consider using `fmt.Errorf` instead of `errors.New(fmt.Sprintf(...))`"
+}
+```
+
+> **Important:** `diff_position` must be the value from `get_pr` output — not the file's absolute line number. Passing the wrong value will result in a 422 error from the Bitbucket API.
+
+## Review Workflow
+
+1. Paste a PR URL in Claude.
+2. Claude calls `get_pr` → receives structured diff and metadata.
+3. Claude calls `list_pr_comments` → sees existing comments to avoid duplication.
+4. Claude proposes inline comments grouped by severity, each with its `diff_position`.
+5. You approve, edit, or drop individual comments.
+6. Claude calls `post_inline_comment` once per approved comment.
+
+## Make Targets
+
+| Target | Description |
+|---|---|
+| `make build` | Compile the binary |
+| `make test` | Run all tests |
+| `make run` | Build and run (requires env vars set) |
+| `make clean` | Remove the compiled binary |
+
+## Development
+
+```bash
+make test    # run parser tests
+make build   # compile
+```
+
+No external dependencies — stdlib only.
