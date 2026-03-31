@@ -11,33 +11,33 @@ import (
 func main() {
 	cfg := loadConfig()
 
-	bb := bitbucket.New(cfg.workspace, cfg.username, cfg.password)
+	bb := bitbucket.New(cfg.workspace, cfg.email, cfg.token)
 	srv := mcp.New(bb)
 	srv.Run()
 }
 
 type config struct {
 	workspace string
-	username  string
-	password  string
+	email     string
+	token     string
 }
 
 func loadConfig() config {
 	cfg := config{
 		workspace: os.Getenv("BITBUCKET_WORKSPACE"),
-		username:  os.Getenv("BITBUCKET_USERNAME"),
-		password:  os.Getenv("BITBUCKET_APP_PASSWORD"),
+		email:     os.Getenv("BITBUCKET_EMAIL"),
+		token:     os.Getenv("BITBUCKET_API_TOKEN"),
 	}
 
 	var missing []string
 	if cfg.workspace == "" {
 		missing = append(missing, "BITBUCKET_WORKSPACE")
 	}
-	if cfg.username == "" {
-		missing = append(missing, "BITBUCKET_USERNAME")
+	if cfg.email == "" {
+		missing = append(missing, "BITBUCKET_EMAIL")
 	}
-	if cfg.password == "" {
-		missing = append(missing, "BITBUCKET_APP_PASSWORD")
+	if cfg.token == "" {
+		missing = append(missing, "BITBUCKET_API_TOKEN")
 	}
 
 	if len(missing) > 0 {

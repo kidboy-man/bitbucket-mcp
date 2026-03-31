@@ -1,18 +1,18 @@
 # bitbucket-mcp
 
-A Go MCP (Model Context Protocol) server that exposes Bitbucket Cloud pull request operations as tools to Claude. It allows Claude to fetch PR diffs, read existing comments, and post inline review comments — without requiring credentials in every conversation.
+A Go MCP (Model Context Protocol) server that exposes Bitbucket Cloud pull request operations as tools to Claude. It allows Claude to fetch PR diffs, read existing comments, and post inline review comments.
 
 ## How it works
 
-The server communicates over **stdio using JSON-RPC 2.0**, the standard MCP transport. Claude Desktop (or any MCP-compatible client) spawns the binary and communicates via stdin/stdout.
+The server communicates over **stdio using JSON-RPC 2.0**, the standard MCP transport. Claude Desktop spawns the binary and communicates via stdin/stdout.
 
 ## Prerequisites
 
 - Go 1.22+
 - A Bitbucket Cloud account
-- A [Bitbucket App Password](https://bitbucket.org/account/settings/app-passwords) with:
-  - `Repositories: Read`
-  - `Pull requests: Read` and `Write`
+- A [Bitbucket API Token](https://id.atlassian.com/manage-profile/security/api-tokens) with scopes:
+  - `pullrequest` (read)
+  - `pullrequest:write` (post comments)
 
 ## Installation
 
@@ -24,37 +24,7 @@ make build
 
 This produces a `bitbucket-mcp` binary in the project root.
 
-## Configuration
-
-Set the following environment variables before running:
-
-| Variable | Description |
-|---|---|
-| `BITBUCKET_WORKSPACE` | Your Bitbucket workspace slug |
-| `BITBUCKET_USERNAME` | Your Bitbucket account username |
-| `BITBUCKET_APP_PASSWORD` | Your Bitbucket App Password |
-
-## Usage
-
-### Run manually
-
-```bash
-BITBUCKET_WORKSPACE=mycompany \
-BITBUCKET_USERNAME=myuser \
-BITBUCKET_APP_PASSWORD=mypassword \
-./bitbucket-mcp
-```
-
-Or via Make:
-
-```bash
-BITBUCKET_WORKSPACE=mycompany \
-BITBUCKET_USERNAME=myuser \
-BITBUCKET_APP_PASSWORD=mypassword \
-make run
-```
-
-### Integrate with Claude Desktop
+## Claude Desktop Setup
 
 Add the following to `~/.claude/claude_desktop_config.json`:
 
@@ -64,9 +34,9 @@ Add the following to `~/.claude/claude_desktop_config.json`:
     "bitbucket": {
       "command": "/absolute/path/to/bitbucket-mcp",
       "env": {
-        "BITBUCKET_WORKSPACE": "your-workspace",
-        "BITBUCKET_USERNAME": "your-username",
-        "BITBUCKET_APP_PASSWORD": "your-app-password"
+        "BITBUCKET_WORKSPACE": "your-workspace-slug",
+        "BITBUCKET_EMAIL": "your-atlassian-email",
+        "BITBUCKET_API_TOKEN": "your-api-token"
       }
     }
   }
@@ -124,20 +94,12 @@ Posts an inline review comment anchored to a specific diff position.
 5. You approve, edit, or drop individual comments.
 6. Claude calls `post_inline_comment` once per approved comment.
 
-## Make Targets
-
-| Target | Description |
-|---|---|
-| `make build` | Compile the binary |
-| `make test` | Run all tests |
-| `make run` | Build and run (requires env vars set) |
-| `make clean` | Remove the compiled binary |
-
 ## Development
 
 ```bash
-make test    # run parser tests
+make test    # run tests
 make build   # compile
+make clean   # remove binary
 ```
 
 No external dependencies — stdlib only.

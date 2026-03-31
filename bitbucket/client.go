@@ -17,17 +17,18 @@ const baseURL = "https://api.bitbucket.org/2.0"
 // Client is an authenticated Bitbucket Cloud REST API client.
 type Client struct {
 	workspace string
-	username  string
-	password  string
+	email     string
+	token     string
 	http      *http.Client
 }
 
 // New creates a new Client. workspace is your Bitbucket workspace slug.
-func New(workspace, username, password string) *Client {
+// email is your Atlassian account email, token is your Bitbucket API token.
+func New(workspace, email, token string) *Client {
 	return &Client{
 		workspace: workspace,
-		username:  username,
-		password:  password,
+		email:     email,
+		token:     token,
 		http:      &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -187,7 +188,7 @@ func (c *Client) PostInlineComment(prURL, filePath string, diffPosition int, bod
 	if err != nil {
 		return err
 	}
-	req.SetBasicAuth(c.username, c.password)
+	req.SetBasicAuth(c.email, c.token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
@@ -211,7 +212,7 @@ func (c *Client) get(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.SetBasicAuth(c.username, c.password)
+	req.SetBasicAuth(c.email, c.token)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.http.Do(req)
@@ -247,8 +248,8 @@ func parsePRMeta(data []byte) (*PR, error) {
 			Branch struct{ Name string } `json:"branch"`
 		} `json:"destination"`
 		Links struct {
-			Self []struct{ Href string } `json:"self"`
-			HTML []struct{ Href string } `json:"html"`
+			Self struct{ Href string } `json:"self"`
+			HTML struct{ Href string } `json:"html"`
 		} `json:"links"`
 	}
 	if err := json.Unmarshal(data, &v); err != nil {
@@ -265,12 +266,8 @@ func parsePRMeta(data []byte) (*PR, error) {
 		SourceBranch: v.Source.Branch.Name,
 		DestBranch:   v.Destination.Branch.Name,
 	}
-	if len(v.Links.Self) > 0 {
-		pr.Links.Self = v.Links.Self[0].Href
-	}
-	if len(v.Links.HTML) > 0 {
-		pr.Links.HTML = v.Links.HTML[0].Href
-	}
+	pr.Links.Self = v.Links.Self.Href
+	pr.Links.HTML = v.Links.HTML.Href
 	return pr, nil
 }
 

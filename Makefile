@@ -1,5 +1,10 @@
 BINARY := bitbucket-mcp
 
+ifneq (,$(wildcard .env))
+	include .env
+	export
+endif
+
 .PHONY: build test run clean
 
 build:
@@ -9,9 +14,6 @@ test:
 	go test ./...
 
 run: build
-	BITBUCKET_WORKSPACE=$(BITBUCKET_WORKSPACE) \
-	BITBUCKET_USERNAME=$(BITBUCKET_USERNAME) \
-	BITBUCKET_APP_PASSWORD=$(BITBUCKET_APP_PASSWORD) \
 	./$(BINARY)
 
 clean:
