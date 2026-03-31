@@ -7,12 +7,15 @@ operations as tools to Claude via **stdio / JSON-RPC 2.0**.
 
 ```
 bitbucket-mcp/
-├── main.go          # entrypoint: loads config, wires deps, starts server
-├── go.mod           # module: github.com/kidboy-man/bitbucket-mcp, go 1.22
-├── server.go        # package mcp — JSON-RPC 2.0 handler + tool registry + dispatch
-├── client.go        # package bitbucket — Bitbucket Cloud REST API v2 client
-├── parser.go        # package reviewer — unified diff parser → ParsedDiff
-└── parser_test.go   # 9 tests for parser correctness
+├── main.go              # entrypoint: loads config, wires deps, starts server
+├── go.mod               # module: github.com/kidboy-man/bitbucket-mcp, go 1.22
+├── mcp/
+│   └── server.go        # JSON-RPC 2.0 handler + tool registry + dispatch
+├── bitbucket/
+│   └── client.go        # Bitbucket Cloud REST API v2 client
+└── reviewer/
+    ├── parser.go        # unified diff parser → ParsedDiff
+    └── parser_test.go   # 9 tests for parser correctness
 ```
 
 ## Package responsibilities

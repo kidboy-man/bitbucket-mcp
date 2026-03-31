@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/yourorg/bitbucket-mcp/bitbucket"
-	"github.com/yourorg/bitbucket-mcp/reviewer"
+	"github.com/kidboy-man/bitbucket-mcp/bitbucket"
+	"github.com/kidboy-man/bitbucket-mcp/reviewer"
 )
 
 // --- JSON-RPC types ---------------------------------------------------------
