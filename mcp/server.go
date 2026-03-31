@@ -134,16 +134,16 @@ var toolDefs = []ToolDef{
 	},
 	{
 		Name:        "post_inline_comment",
-		Description: "Post an approved inline comment to Bitbucket. Use the DiffPosition value from get_pr output — NOT the file's absolute line number.",
+		Description: "Post an approved inline comment to Bitbucket. Use new_line_no from get_pr output to anchor the comment to the correct line in the new file.",
 		InputSchema: JSONSchema{
 			Type: "object",
 			Properties: map[string]JSONSchema{
-				"pr_url":        {Type: "string"},
-				"file":          {Type: "string", Description: "Relative file path, e.g. internal/handler/user.go"},
-				"diff_position": {Type: "integer", Description: "DiffPosition from get_pr output"},
-				"body":          {Type: "string", Description: "Markdown comment body"},
+				"pr_url":      {Type: "string"},
+				"file":        {Type: "string", Description: "Relative file path, e.g. internal/handler/user.go"},
+				"new_line_no": {Type: "integer", Description: "new_line_no from get_pr output (line number in the new file)"},
+				"body":        {Type: "string", Description: "Markdown comment body"},
 			},
-			Required: []string{"pr_url", "file", "diff_position", "body"},
+			Required: []string{"pr_url", "file", "new_line_no", "body"},
 		},
 	},
 }
@@ -283,7 +283,7 @@ func (s *Server) toolGetPR(args json.RawMessage) (any, error) {
 			"commits":       pr.Commits,
 		},
 		"diff": files,
-		"note": "Use diff_position (not new_line_no) when calling post_inline_comment.",
+		"note": "Use new_line_no (not diff_position) when calling post_inline_comment.",
 	}
 
 	b, err := json.MarshalIndent(out, "", "  ")
@@ -315,19 +315,19 @@ func (s *Server) toolListComments(args json.RawMessage) (any, error) {
 
 func (s *Server) toolPostComment(args json.RawMessage) (any, error) {
 	var a struct {
-		PRURL        string `json:"pr_url"`
-		File         string `json:"file"`
-		DiffPosition int    `json:"diff_position"`
-		Body         string `json:"body"`
+		PRURL     string `json:"pr_url"`
+		File      string `json:"file"`
+		NewLineNo int    `json:"new_line_no"`
+		Body      string `json:"body"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return nil, err
 	}
 
-	if err := s.bb.PostInlineComment(a.PRURL, a.File, a.DiffPosition, a.Body); err != nil {
+	if err := s.bb.PostInlineComment(a.PRURL, a.File, a.NewLineNo, a.Body); err != nil {
 		return nil, err
 	}
-	return fmt.Sprintf("comment posted on %s:%d", a.File, a.DiffPosition), nil
+	return fmt.Sprintf("comment posted on %s:%d", a.File, a.NewLineNo), nil
 }
 
 // --- helpers ----------------------------------------------------------------

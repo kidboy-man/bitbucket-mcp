@@ -160,9 +160,9 @@ func (c *Client) GetComments(prURL string) ([]InlineComment, error) {
 // --- PostInlineComment ------------------------------------------------------
 
 // PostInlineComment posts an inline comment anchored to a specific file and
-// diff position. diffPosition must be the DiffPosition from ParsedDiff
-// (not the file's absolute line number).
-func (c *Client) PostInlineComment(prURL, filePath string, diffPosition int, body string) error {
+// new file line number. newLineNo is the line number in the destination file
+// (new_line_no from get_pr output).
+func (c *Client) PostInlineComment(prURL, filePath string, newLineNo int, body string) error {
 	_, repo, prID, err := ParseURL(prURL)
 	if err != nil {
 		return err
@@ -171,7 +171,7 @@ func (c *Client) PostInlineComment(prURL, filePath string, diffPosition int, bod
 	payload := map[string]any{
 		"content": map[string]string{"raw": body},
 		"inline": map[string]any{
-			"to":   diffPosition,
+			"to":   newLineNo,
 			"path": filePath,
 		},
 	}

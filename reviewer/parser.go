@@ -161,18 +161,18 @@ func Parse(raw string) (*ParsedDiff, error) {
 			switch line[0] {
 			case '+':
 				dl.Type = LineAdded
-				curHunk.NewStart++ // track running new line counter
-				dl.NewLineNo = curHunk.NewStart - 1
+				curHunk.NewStart++
+				dl.NewLineNo = curHunk.NewStart
 			case '-':
 				dl.Type = LineRemoved
 				curHunk.OldStart++
-				dl.OldLineNo = curHunk.OldStart - 1
+				dl.OldLineNo = curHunk.OldStart
 			case ' ':
 				dl.Type = LineContext
 				curHunk.OldStart++
 				curHunk.NewStart++
-				dl.OldLineNo = curHunk.OldStart - 1
-				dl.NewLineNo = curHunk.NewStart - 1
+				dl.OldLineNo = curHunk.OldStart
+				dl.NewLineNo = curHunk.NewStart
 			default:
 				// No-newline marker or unknown — skip position bump
 				diffPos--

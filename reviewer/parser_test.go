@@ -72,8 +72,8 @@ func TestAddedLineNewLineNo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
-	// First hunk: context starts at new line 10.
-	// Line order: context(10), context(11), context(12), added(13), added(14), added(15), context(16), context(17)
+	// First hunk: @@ -10,7 +10,9 @@
+	// context(10), context(11), context(12), added(13), added(14), added(15), context(16), context(17)
 	hunk := pd.Files[0].Hunks[0]
 	addedLines := make([]DiffLine, 0)
 	for _, l := range hunk.Lines {
@@ -83,6 +83,13 @@ func TestAddedLineNewLineNo(t *testing.T) {
 	}
 	if len(addedLines) != 3 {
 		t.Fatalf("expected 3 added lines in hunk 0, got %d", len(addedLines))
+	}
+	// Verify exact new file line numbers
+	expected := []int{13, 14, 15}
+	for i, l := range addedLines {
+		if l.NewLineNo != expected[i] {
+			t.Errorf("added line %d: expected NewLineNo %d, got %d", i, expected[i], l.NewLineNo)
+		}
 	}
 }
 
