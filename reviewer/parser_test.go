@@ -204,6 +204,109 @@ rename to new/path.go
 	}
 }
 
+func TestGetContextForLine(t *testing.T) {
+	pd, err := Parse(sampleDiff)
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	file := "internal/handler/user.go"
+
+	tests := []struct {
+		name         string
+		filePath     string
+		newLineNo    int
+		contextLines int
+		wantFound    bool
+		wantLen      int
+	}{
+		{
+			// anchor at index 4 in hunk 0 (9 lines total): start=2, end=7 → 5 lines
+			name:         "middle of hunk returns symmetric window",
+			filePath:     file,
+			newLineNo:    14,
+			contextLines: 2,
+			wantFound:    true,
+			wantLen:      5,
+		},
+		{
+			// anchor at index 0: start=0, end=min(9,6)=6 → 6 lines
+			name:         "near start of hunk clips to beginning",
+			filePath:     file,
+			newLineNo:    10,
+			contextLines: 5,
+			wantFound:    true,
+			wantLen:      6,
+		},
+		{
+			// anchor at index 8 (last): start=max(0,3)=3, end=9 → 6 lines
+			name:         "near end of hunk clips to end",
+			filePath:     file,
+			newLineNo:    18,
+			contextLines: 5,
+			wantFound:    true,
+			wantLen:      6,
+		},
+		{
+			// anchor at index 4, contextLines=1: start=3, end=6 → 3 lines
+			name:         "contextLines=1 returns exactly 3 lines",
+			filePath:     file,
+			newLineNo:    14,
+			contextLines: 1,
+			wantFound:    true,
+			wantLen:      3,
+		},
+		{
+			name:         "unknown file returns not found",
+			filePath:     "does/not/exist.go",
+			newLineNo:    14,
+			contextLines: 5,
+			wantFound:    false,
+		},
+		{
+			name:         "line not in diff returns not found",
+			filePath:     file,
+			newLineNo:    9999,
+			contextLines: 5,
+			wantFound:    false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			lines, found := pd.GetContextForLine(tc.filePath, tc.newLineNo, tc.contextLines)
+			if found != tc.wantFound {
+				t.Fatalf("found=%v, want %v", found, tc.wantFound)
+			}
+			if !tc.wantFound {
+				if lines != nil {
+					t.Error("expected nil slice when not found")
+				}
+				return
+			}
+			if len(lines) != tc.wantLen {
+				t.Errorf("len=%d, want %d", len(lines), tc.wantLen)
+			}
+			// Anchor must be present in the returned window.
+			hasAnchor := false
+			for _, l := range lines {
+				if l.NewLineNo == tc.newLineNo {
+					hasAnchor = true
+					break
+				}
+			}
+			if !hasAnchor {
+				t.Errorf("anchor line %d not found in result window", tc.newLineNo)
+			}
+			// DiffPosition values must be positive (non-zero).
+			for _, l := range lines {
+				if l.DiffPosition <= 0 {
+					t.Errorf("line with DiffPosition %d — expected > 0", l.DiffPosition)
+				}
+			}
+		})
+	}
+}
+
 func TestSummaryContainsDiffPos(t *testing.T) {
 	pd, err := Parse(sampleDiff)
 	if err != nil {

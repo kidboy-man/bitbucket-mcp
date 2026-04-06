@@ -15,7 +15,7 @@ bitbucket-mcp/
 │   └── client.go        # Bitbucket Cloud REST API v2 client
 └── reviewer/
     ├── parser.go        # unified diff parser → ParsedDiff
-    └── parser_test.go   # 9 tests for parser correctness
+    └── parser_test.go   # 15 tests for parser correctness
 ```
 
 ## Package responsibilities
@@ -30,8 +30,8 @@ JSON-RPC `Request`, dispatches via `handle()`, encodes the `Response` to stdout.
 
 Handles three methods:
 - `initialize` — protocol version + server capabilities
-- `tools/list` — returns the three tool definitions
-- `tools/call` — dispatches to `toolGetPR`, `toolListComments`, or `toolPostComment`
+- `tools/list` — returns the four tool definitions
+- `tools/call` — dispatches to `toolGetPR`, `toolListComments`, `toolPostComment`, or `toolGetCommentsWithContext`
 
 Tool results are always wrapped as:
 ```json
@@ -44,8 +44,8 @@ Key types: `Client`, `PR`, `Commit`, `InlineComment`.
 - `ParseURL(rawURL)` — parses `https://bitbucket.org/{workspace}/{repo}/pull-requests/{id}`
 - `GetPR(prURL)` — three sequential calls: metadata, diff, commits
 - `GetComments(prURL)` — returns only inline comments (skips PR-level)
-- `PostInlineComment(prURL, filePath, diffPosition, body)` — posts with `inline.to`
-  set to `diffPosition` (NOT an absolute file line number)
+- `PostInlineComment(prURL, filePath, newLineNo, body)` — posts with `inline.to`
+  set to `newLineNo` (the new-file line number, not a diff position)
 
 All HTTP calls use Basic Auth, 30s timeout, no external dependencies.
 
@@ -69,9 +69,12 @@ Key functions:
   `DiffPosition` increments once per `@@` line and once per content line, resets per file.
 - `(*ParsedDiff).FindDiffPosition(filePath, newLineNo)` — maps a new-file line number to
   its `DiffPosition` for the Bitbucket API.
+- `(*ParsedDiff).GetContextForLine(filePath, newLineNo, contextLines)` — returns the slice
+  of `DiffLine`s within ±`contextLines` of the given new-file line number, clamped to hunk
+  boundaries. Returns `(nil, false)` when the line is not found in the diff.
 - `(*ParsedDiff).Summary()` — compact text block for Claude showing file/hunk/line metadata.
 
-## The three MCP tools
+## The four MCP tools
 
 ### `get_pr`
 Input: `{ "pr_url": "https://bitbucket.org/..." }`
@@ -80,7 +83,7 @@ Returns JSON with:
 - `pr` — id, title, description, author, branches, state, commits
 - `diff` — array of files with hunks; each line has `diff_position`, `old_line_no`,
   `new_line_no`, `type`, `content`
-- `note` — reminder to use `diff_position`, not `new_line_no`, for posting
+- `note` — reminder to use `new_line_no`, not `diff_position`, when calling `post_inline_comment`
 
 ### `list_pr_comments`
 Input: `{ "pr_url": "..." }`
@@ -91,15 +94,27 @@ Returns existing inline comments (id, body, file, line, author, created_on).
 Input:
 ```json
 {
-  "pr_url":        "https://bitbucket.org/...",
-  "file":          "internal/handler/user.go",
-  "diff_position": 4,
-  "body":          "Consider using fmt.Errorf instead."
+  "pr_url":      "https://bitbucket.org/...",
+  "file":        "internal/handler/user.go",
+  "new_line_no": 45,
+  "body":        "Consider using fmt.Errorf instead."
 }
 ```
 
-**Critical:** `diff_position` must be the `DiffPosition` from `get_pr` output —
-NOT the file's absolute line number. Wrong value → 422 from Bitbucket API.
+**Note:** `new_line_no` is the `new_line_no` value from `get_pr` output — the line number
+in the new (head) file. This is what `bitbucket.PostInlineComment` passes as `inline.to`.
+
+### `get_pr_review_comments_with_context`
+Input: `{ "pr_url": "..." }`
+
+Returns an array of enriched inline comments. Each entry:
+- `id`, `author`, `created_on`, `body`, `file`, `line` — the comment itself
+- `diff_context` — up to 11 diff lines (±5 from the anchored line) with `diff_position`,
+  `old_line_no`, `new_line_no`, `type`, `content`. Empty array when line not in diff.
+
+Use this tool when you need to read existing review feedback and propose fixes: the
+`diff_context` field provides the code snippet each reviewer was commenting on so you
+can reason about what change is being requested.
 
 ## Auth & configuration
 

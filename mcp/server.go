@@ -146,6 +146,20 @@ var toolDefs = []ToolDef{
 			Required: []string{"pr_url", "file", "new_line_no", "body"},
 		},
 	},
+	{
+		Name:        "get_pr_review_comments_with_context",
+		Description: "Fetch all inline review comments on a PR, each enriched with \u00b15 surrounding diff lines so you can understand the code being discussed and propose targeted fixes.",
+		InputSchema: JSONSchema{
+			Type: "object",
+			Properties: map[string]JSONSchema{
+				"pr_url": {
+					Type:        "string",
+					Description: "Full Bitbucket PR URL, e.g. https://bitbucket.org/workspace/repo/pull-requests/42",
+				},
+			},
+			Required: []string{"pr_url"},
+		},
+	},
 }
 
 func (s *Server) handleToolsList(req Request) Response {
@@ -179,6 +193,8 @@ func (s *Server) handleToolCall(req Request) Response {
 		result, err = s.toolListComments(p.Arguments)
 	case "post_inline_comment":
 		result, err = s.toolPostComment(p.Arguments)
+	case "get_pr_review_comments_with_context":
+		result, err = s.toolGetCommentsWithContext(p.Arguments)
 	default:
 		return errorResp(req.ID, -32601, "unknown tool: "+p.Name)
 	}
@@ -307,6 +323,88 @@ func (s *Server) toolListComments(args json.RawMessage) (any, error) {
 	}
 
 	b, err := json.MarshalIndent(comments, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
+}
+
+func (s *Server) toolGetCommentsWithContext(args json.RawMessage) (any, error) {
+	var a struct {
+		PRURL string `json:"pr_url"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil, err
+	}
+
+	pr, err := s.bb.GetPR(a.PRURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetching PR: %w", err)
+	}
+
+	comments, err := s.bb.GetComments(a.PRURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetching comments: %w", err)
+	}
+
+	pd, err := reviewer.Parse(pr.RawDiff)
+	if err != nil {
+		return nil, fmt.Errorf("parsing diff: %w", err)
+	}
+
+	type lineResult struct {
+		DiffPosition int    `json:"diff_position"`
+		OldLineNo    int    `json:"old_line_no,omitempty"`
+		NewLineNo    int    `json:"new_line_no,omitempty"`
+		Type         string `json:"type"`
+		Content      string `json:"content"`
+	}
+	type commentResult struct {
+		ID          int          `json:"id"`
+		Author      string       `json:"author"`
+		CreatedOn   string       `json:"created_on"`
+		Body        string       `json:"body"`
+		File        string       `json:"file"`
+		Line        int          `json:"line"`
+		DiffContext []lineResult `json:"diff_context"`
+	}
+
+	results := make([]commentResult, 0, len(comments))
+	for _, c := range comments {
+		cr := commentResult{
+			ID:          c.ID,
+			Author:      c.Author,
+			CreatedOn:   c.CreatedOn,
+			Body:        c.Body,
+			File:        c.File,
+			Line:        c.Line,
+			DiffContext: []lineResult{},
+		}
+
+		if ctxLines, ok := pd.GetContextForLine(c.File, c.Line, 5); ok {
+			cr.DiffContext = make([]lineResult, 0, len(ctxLines))
+			for _, l := range ctxLines {
+				lineType := "context"
+				switch l.Type {
+				case reviewer.LineAdded:
+					lineType = "added"
+				case reviewer.LineRemoved:
+					lineType = "removed"
+				}
+				cr.DiffContext = append(cr.DiffContext, lineResult{
+					DiffPosition: l.DiffPosition,
+					OldLineNo:    l.OldLineNo,
+					NewLineNo:    l.NewLineNo,
+					Type:         lineType,
+					Content:      l.Content,
+				})
+			}
+		}
+
+		results = append(results, cr)
+	}
+
+	b, err := json.MarshalIndent(results, "", "  ")
 	if err != nil {
 		return nil, err
 	}

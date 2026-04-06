@@ -272,6 +272,51 @@ func (pd *ParsedDiff) FindDiffPosition(filePath string, newLineNo int) (int, err
 	return 0, fmt.Errorf("file %q not found in diff", filePath)
 }
 
+// GetContextForLine returns the DiffLines surrounding the given new-file line
+// number in filePath, up to contextLines lines on each side.
+//
+// The anchor is matched by NewLineNo; only non-removed lines are considered as
+// anchors so that a comment on a live line is found correctly.  The returned
+// window spans all line types (context, added, removed) within the same hunk,
+// clamped to the hunk boundaries.
+//
+// Returns (nil, false) when the file is not in the diff or the line number does
+// not appear in any hunk, allowing callers to degrade gracefully (the comment
+// is still surfaced, just without a diff snippet).
+func (pd *ParsedDiff) GetContextForLine(filePath string, newLineNo int, contextLines int) ([]DiffLine, bool) {
+	for _, f := range pd.Files {
+		if f.Path != filePath {
+			continue
+		}
+		for _, h := range f.Hunks {
+			anchorIdx := -1
+			for i, l := range h.Lines {
+				if l.NewLineNo == newLineNo && l.Type != LineRemoved {
+					anchorIdx = i
+					break
+				}
+			}
+			if anchorIdx == -1 {
+				continue
+			}
+			start := anchorIdx - contextLines
+			if start < 0 {
+				start = 0
+			}
+			end := anchorIdx + contextLines + 1
+			if end > len(h.Lines) {
+				end = len(h.Lines)
+			}
+			result := make([]DiffLine, end-start)
+			copy(result, h.Lines[start:end])
+			return result, true
+		}
+		// File found but line not in any hunk.
+		return nil, false
+	}
+	return nil, false
+}
+
 // Summary returns a compact, Claude-readable description of the diff:
 // file paths, hunk ranges, and each changed line with its position metadata.
 // This is what gets sent to Claude for review.
