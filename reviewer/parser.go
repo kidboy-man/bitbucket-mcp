@@ -10,7 +10,7 @@ import (
 type LineType int
 
 const (
-	LineContext  LineType = iota // unchanged context line
+	LineContext LineType = iota // unchanged context line
 	LineAdded                   // line prefixed with '+'
 	LineRemoved                 // line prefixed with '-'
 )
