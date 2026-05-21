@@ -1,148 +1,110 @@
 # bitbucket-mcp
 
-A Go MCP (Model Context Protocol) server that exposes Bitbucket Cloud pull request
-operations as tools to Claude via **stdio / JSON-RPC 2.0**.
+A Go MCP (Model Context Protocol) server that exposes Bitbucket Cloud pull request review operations as tools via the official MCP Go SDK over stdio.
 
 ## Repository layout
 
 ```
 bitbucket-mcp/
-├── main.go              # entrypoint: loads config, wires deps, starts server
-├── go.mod               # module: github.com/kidboy-man/bitbucket-mcp, go 1.22
-├── mcp/
-│   └── server.go        # JSON-RPC 2.0 handler + tool registry + dispatch
-├── bitbucket/
-│   └── client.go        # Bitbucket Cloud REST API v2 client
-└── reviewer/
-    ├── parser.go        # unified diff parser → ParsedDiff
-    └── parser_test.go   # 15 tests for parser correctness
+├── cmd/bitbucket-mcp/      # entrypoint: loads config, wires deps, starts MCP stdio server
+├── internal/config/        # env var loading and alias warnings
+├── internal/bitbucket/     # typed Bitbucket Cloud REST API v2 adapter
+├── internal/diff/          # unified diff parser and cursor pagination
+├── internal/review/        # review workflow service and store port
+└── internal/mcp/           # MCP SDK server and tool registration
 ```
 
 ## Package responsibilities
 
-### `main`
-Reads env vars via `loadConfig()`, fails fast on missing values, constructs
-`bitbucket.Client` and `mcp.Server`, then calls `srv.Run()`.
+### `cmd/bitbucket-mcp`
+Loads config with `config.Load()`, constructs `bitbucket.Client`, wraps it in `review.Service`, registers MCP tools, then runs `sdkmcp.StdioTransport`.
 
-### `mcp` (server.go)
-`Server.Run()` loops over stdin with `bufio.Scanner`, decodes each line as a
-JSON-RPC `Request`, dispatches via `handle()`, encodes the `Response` to stdout.
+### `internal/config`
+Reads canonical env vars and supports deprecated aliases. Canonical vars win when both are set. Warnings never include token values.
 
-Handles three methods:
-- `initialize` — protocol version + server capabilities
-- `tools/list` — returns the four tool definitions
-- `tools/call` — dispatches to `toolGetPR`, `toolListComments`, `toolPostComment`, or `toolGetCommentsWithContext`
+### `internal/bitbucket`
+Typed Bitbucket Cloud REST client with context-aware requests, Basic Auth, bounded error bodies, testable base URL/client options, PR URL validation, and pagination loop guards.
 
-Tool results are always wrapped as:
-```json
-{ "content": [{ "type": "text", "text": "..." }] }
-```
+Important rules:
+- Only Bitbucket Cloud URLs are supported: `https://bitbucket.org/{workspace}/{repo}/pull-requests/{id}`.
+- PR URL workspace must match configured workspace.
+- Inline comments use `inline.to` with the new-file line number.
+- `diff_position` is metadata only; never use it as Bitbucket comment anchor.
 
-### `bitbucket` (client.go)
-Key types: `Client`, `PR`, `Commit`, `InlineComment`.
+### `internal/diff`
+Parses unified diffs into files, hunks, and line metadata. `DiffPosition` is a 1-based position in the parsed file diff. `NewLineNo` is the head-file line number used for inline comment anchors.
 
-- `ParseURL(rawURL)` — parses `https://bitbucket.org/{workspace}/{repo}/pull-requests/{id}`
-- `GetPR(prURL)` — three sequential calls: metadata, diff, commits
-- `GetComments(prURL)` — returns only inline comments (skips PR-level)
-- `PostInlineComment(prURL, filePath, newLineNo, body)` — posts with `inline.to`
-  set to `newLineNo` (the new-file line number, not a diff position)
+`ParsedDiff.GetPage()` returns paginated structured diff pages. Cursors are opaque base64 JSON and are locked to request parameters with a filter hash.
 
-All HTTP calls use Basic Auth, 30s timeout, no external dependencies.
+### `internal/review`
+Application service for review workflows. MCP handlers should stay thin: validate input, call service, translate result.
 
-### `reviewer` (parser.go)
-Core types:
+Key invariants:
+- `DraftReviewComments` validates anchors and deduplicates, but performs no writes.
+- `PostReviewComments` requires a full stateless draft and checks `source_commit_hash` before any write.
+- `ApprovePR` and `RequestChangesPR` require `expected_source_commit_hash` before writing.
+- Posting comments can partially succeed; results include posted, failed, skipped, and created task arrays.
+- No merge, decline, auto-approval, or auto-request-changes behavior exists.
 
-```go
-type LineType int  // LineContext | LineAdded | LineRemoved
+### `internal/mcp`
+Registers legacy and new MCP SDK tools with read/write annotations. Legacy tools remain available with deprecation notes.
 
-type DiffLine struct {
-    DiffPosition int    // 1-based position in the file's diff — what Bitbucket API wants
-    OldLineNo    int    // base file line number (0 if line doesn't exist there)
-    NewLineNo    int    // head file line number (0 if line doesn't exist there)
-    Type         LineType
-    Content      string
-}
-```
+## MCP tools
 
-Key functions:
-- `Parse(raw string) (*ParsedDiff, error)` — state-machines through the unified diff.
-  `DiffPosition` increments once per `@@` line and once per content line, resets per file.
-- `(*ParsedDiff).FindDiffPosition(filePath, newLineNo)` — maps a new-file line number to
-  its `DiffPosition` for the Bitbucket API.
-- `(*ParsedDiff).GetContextForLine(filePath, newLineNo, contextLines)` — returns the slice
-  of `DiffLine`s within ±`contextLines` of the given new-file line number, clamped to hunk
-  boundaries. Returns `(nil, false)` when the line is not found in the diff.
-- `(*ParsedDiff).Summary()` — compact text block for Claude showing file/hunk/line metadata.
+Legacy tools:
+- `get_pr` — deprecated aggregate PR metadata + full structured diff.
+- `list_pr_comments` — deprecated inline comment list.
+- `post_inline_comment` — deprecated single inline comment post.
+- `get_pr_review_comments_with_context` — deprecated inline comments enriched with diff context.
 
-## The four MCP tools
+Current read tools:
+- `get_pr_context` — PR metadata, commits, comments, tasks, statuses summary, first diff page.
+- `get_pr_diff` — paginated structured diff; supports cursor and file filter.
+- `list_pr_tasks` — PR tasks.
+- `list_pr_statuses` — build/pipeline status summary.
+- `draft_review_comments` — validate findings and produce stateless posting plan; no writes.
 
-### `get_pr`
-Input: `{ "pr_url": "https://bitbucket.org/..." }`
-
-Returns JSON with:
-- `pr` — id, title, description, author, branches, state, commits
-- `diff` — array of files with hunks; each line has `diff_position`, `old_line_no`,
-  `new_line_no`, `type`, `content`
-- `note` — reminder to use `new_line_no`, not `diff_position`, when calling `post_inline_comment`
-
-### `list_pr_comments`
-Input: `{ "pr_url": "..." }`
-
-Returns existing inline comments (id, body, file, line, author, created_on).
-
-### `post_inline_comment`
-Input:
-```json
-{
-  "pr_url":      "https://bitbucket.org/...",
-  "file":        "internal/handler/user.go",
-  "new_line_no": 45,
-  "body":        "Consider using fmt.Errorf instead."
-}
-```
-
-**Note:** `new_line_no` is the `new_line_no` value from `get_pr` output — the line number
-in the new (head) file. This is what `bitbucket.PostInlineComment` passes as `inline.to`.
-
-### `get_pr_review_comments_with_context`
-Input: `{ "pr_url": "..." }`
-
-Returns an array of enriched inline comments. Each entry:
-- `id`, `author`, `created_on`, `body`, `file`, `line` — the comment itself
-- `diff_context` — up to 11 diff lines (±5 from the anchored line) with `diff_position`,
-  `old_line_no`, `new_line_no`, `type`, `content`. Empty array when line not in diff.
-
-Use this tool when you need to read existing review feedback and propose fixes: the
-`diff_context` field provides the code snippet each reviewer was commenting on so you
-can reason about what change is being requested.
+Current write tools:
+- `post_review_comments` — post approved draft after stale-commit guard.
+- `approve_pr` — approve after expected source commit hash guard.
+- `request_changes_pr` — request changes after expected source commit hash guard.
+- `resolve_task` / `reopen_task` — update PR task state.
+- `resolve_comment_thread` / `reopen_comment_thread` — update comment thread resolution.
 
 ## Auth & configuration
 
 | Env var | Description |
 |---|---|
 | `BITBUCKET_WORKSPACE` | Workspace slug |
-| `BITBUCKET_USERNAME` | Bitbucket account username |
-| `BITBUCKET_APP_PASSWORD` | App password with `Repositories: Read`, `Pull requests: Read+Write` |
+| `BITBUCKET_EMAIL` | Bitbucket account email or username for Basic Auth |
+| `BITBUCKET_API_TOKEN` | Bitbucket API token/app password with `Repositories: Read`, `Pull requests: Read+Write` |
 
-## Build
+Aliases are supported for existing configs: `BITBUCKET_USERNAME` falls back to `BITBUCKET_EMAIL`, and `BITBUCKET_APP_PASSWORD` falls back to `BITBUCKET_API_TOKEN`.
+
+## Commands
 
 ```bash
 go test ./...
-go build -o bitbucket-mcp .
+go test ./internal/review -run TestDraftReviewComments
+go test ./internal/bitbucket -run TestPagination
+go build ./cmd/bitbucket-mcp
+make build
+make test
 ```
 
 ## Claude Desktop integration
 
 `~/.claude/claude_desktop_config.json`:
+
 ```json
 {
   "mcpServers": {
     "bitbucket": {
       "command": "/absolute/path/to/bitbucket-mcp",
       "env": {
-        "BITBUCKET_WORKSPACE":    "your-workspace",
-        "BITBUCKET_USERNAME":     "your-username",
-        "BITBUCKET_APP_PASSWORD": "your-app-password"
+        "BITBUCKET_WORKSPACE": "your-workspace",
+        "BITBUCKET_EMAIL": "your-email@example.com",
+        "BITBUCKET_API_TOKEN": "your-api-token"
       }
     }
   }
@@ -151,8 +113,6 @@ go build -o bitbucket-mcp .
 
 ## Known gaps
 
-- No pagination on `GetComments` — truncated at Bitbucket's default page size (~100)
-- `post_inline_comment` is sequential; large batches should add retry + partial-failure reporting
-- No diff size guard — very large PRs will produce a large `get_pr` response
-- `ParseURL` assumes Bitbucket Cloud (not self-hosted Bitbucket Server)
-- `min()` helper in `client.go` is redundant on Go 1.21+ (has builtin `min`)
+- `get_pr` legacy output can still be large for very large PRs.
+- Success-path diff response reads are unbounded before parsing.
+- `ParseURL` assumes Bitbucket Cloud, not self-hosted Bitbucket Server.
