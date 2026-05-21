@@ -24,6 +24,20 @@ make build
 
 This produces a `bitbucket-mcp` binary in the project root.
 
+Print generic MCP config:
+
+```bash
+./bitbucket-mcp install --target generic --print-config
+```
+
+Run diagnostics:
+
+```bash
+./bitbucket-mcp doctor --target generic
+```
+
+See [INSTALL.md](INSTALL.md) for Claude Desktop, Claude Code, Cursor, Codex, and generic MCP setup.
+
 ## Claude Desktop Setup
 
 Add the following to `~/.claude/claude_desktop_config.json`:

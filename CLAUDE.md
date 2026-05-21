@@ -87,7 +87,10 @@ Aliases are supported for existing configs: `BITBUCKET_USERNAME` falls back to `
 go test ./...
 go test ./internal/review -run TestDraftReviewComments
 go test ./internal/bitbucket -run TestPagination
+go test ./internal/install -run TestRunInstall
 go build ./cmd/bitbucket-mcp
+./bitbucket-mcp install --target generic --print-config
+./bitbucket-mcp doctor --target generic
 make build
 make test
 ```
