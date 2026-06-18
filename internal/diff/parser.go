@@ -1,4 +1,4 @@
-package reviewer
+package diff
 
 import (
 	"fmt"
@@ -18,8 +18,8 @@ const (
 // DiffLine is a single line in a hunk, with its full position tracking.
 type DiffLine struct {
 	// DiffPosition is the 1-based position within the file's diff
-	// (counting from the first '@@' line). This is what the Bitbucket
-	// inline comment API expects for the "to" field.
+	// (counting from the first @@ line). Useful metadata for tooling;
+	// Bitbucket inline comment anchors use inline.to (new_line_no), not diff_position.
 	DiffPosition int
 
 	// OldLineNo is the line number in the base (left) file.
@@ -63,29 +63,25 @@ type FileDiff struct {
 	Hunks []Hunk
 }
 
-// ParsedDiff is the top-level result returned to Claude.
+// ParsedDiff is the top-level parsed result.
 type ParsedDiff struct {
 	Files []FileDiff
 }
 
 // Parse parses a unified diff string into a structured ParsedDiff.
-// It correctly tracks DiffPosition (the Bitbucket API's notion of line position)
-// independently of OldLineNo / NewLineNo.
+// DiffPosition increments once per @@ line and once per content line, resets per file.
 func Parse(raw string) (*ParsedDiff, error) {
 	lines := strings.Split(raw, "\n")
 	pd := &ParsedDiff{}
 
 	var cur *FileDiff
 	var curHunk *Hunk
-	diffPos := 0 // resets per file, counts from first @@ line
+	diffPos := 0 // resets per file
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
 
 		switch {
-		// ----------------------------------------------------------------
-		// File header: "diff --git a/foo b/foo"
-		// ----------------------------------------------------------------
 		case strings.HasPrefix(line, "diff --git "):
 			if cur != nil {
 				pd.Files = append(pd.Files, *cur)
@@ -94,16 +90,12 @@ func Parse(raw string) (*ParsedDiff, error) {
 			diffPos = 0
 			curHunk = nil
 
-			// Extract paths from "diff --git a/path b/path"
 			parts := strings.Fields(line)
 			if len(parts) >= 4 {
 				cur.OldPath = strings.TrimPrefix(parts[2], "a/")
 				cur.Path = strings.TrimPrefix(parts[3], "b/")
 			}
 
-		// ----------------------------------------------------------------
-		// Extended headers
-		// ----------------------------------------------------------------
 		case strings.HasPrefix(line, "new file mode"):
 			if cur != nil {
 				cur.IsNew = true
@@ -125,7 +117,6 @@ func Parse(raw string) (*ParsedDiff, error) {
 				cur.OldPath = strings.TrimPrefix(line, "rename from ")
 			}
 
-		// Explicit new path from +++ line (handles /dev/null for new files)
 		case strings.HasPrefix(line, "+++ "):
 			if cur != nil {
 				p := strings.TrimPrefix(line, "+++ ")
@@ -135,14 +126,11 @@ func Parse(raw string) (*ParsedDiff, error) {
 				}
 			}
 
-		// ----------------------------------------------------------------
-		// Hunk header: "@@ -old,count +new,count @@ optional context"
-		// ----------------------------------------------------------------
 		case strings.HasPrefix(line, "@@ "):
 			if cur == nil {
 				continue
 			}
-			diffPos++ // the @@ line itself counts as position 1 for this hunk
+			diffPos++
 			hunk, err := parseHunkHeader(line)
 			if err != nil {
 				return nil, fmt.Errorf("file %q: %w", cur.Path, err)
@@ -151,9 +139,6 @@ func Parse(raw string) (*ParsedDiff, error) {
 			cur.Hunks = append(cur.Hunks, *hunk)
 			curHunk = &cur.Hunks[len(cur.Hunks)-1]
 
-		// ----------------------------------------------------------------
-		// Diff content lines
-		// ----------------------------------------------------------------
 		case curHunk != nil && len(line) > 0:
 			diffPos++
 			dl := DiffLine{DiffPosition: diffPos, Content: line[1:]}
@@ -174,7 +159,7 @@ func Parse(raw string) (*ParsedDiff, error) {
 				dl.OldLineNo = curHunk.OldStart
 				dl.NewLineNo = curHunk.NewStart
 			default:
-				// No-newline marker or unknown — skip position bump
+				// No-newline marker or unknown — skip position bump.
 				diffPos--
 				continue
 			}
@@ -190,19 +175,14 @@ func Parse(raw string) (*ParsedDiff, error) {
 	return pd, nil
 }
 
-// parseHunkHeader parses "@@ -oldStart,oldCount +newStart,newCount @@"
-// into a Hunk with the numeric fields populated.
-// The Start fields are set to (headerValue - 1) so the content loop can
-// use pre-increment to produce 1-based line numbers.
 func parseHunkHeader(header string) (*Hunk, error) {
-	// Extract the part between the @@ markers: "-3,7 +3,6"
 	inner := header
 	inner = strings.TrimPrefix(inner, "@@ ")
 	if idx := strings.Index(inner, " @@"); idx >= 0 {
 		inner = inner[:idx]
 	}
 
-	parts := strings.Fields(inner) // ["-3,7", "+3,6"]
+	parts := strings.Fields(inner)
 	if len(parts) < 2 {
 		return nil, fmt.Errorf("malformed hunk header: %q", header)
 	}
@@ -217,7 +197,6 @@ func parseHunkHeader(header string) (*Hunk, error) {
 	}
 
 	return &Hunk{
-		// Subtract 1 so the loop's pre-increment gives the correct 1-based value.
 		OldStart: oldStart - 1,
 		OldCount: oldCount,
 		NewStart: newStart - 1,
@@ -225,8 +204,6 @@ func parseHunkHeader(header string) (*Hunk, error) {
 	}, nil
 }
 
-// parseRange parses "-3,7" or "+10" into (start, count).
-// A missing count defaults to 1 (per the unified diff spec).
 func parseRange(s string) (start, count int, err error) {
 	s = strings.TrimLeft(s, "+-")
 	parts := strings.SplitN(s, ",", 2)
@@ -246,12 +223,7 @@ func parseRange(s string) (start, count int, err error) {
 }
 
 // FindDiffPosition returns the DiffPosition for a given file path and
-// new-file line number. This is the value to pass to the Bitbucket
-// inline comment API as "to".
-//
-// Returns (0, error) if the line is not found in the diff (e.g. it is
-// an unchanged line outside any hunk — Bitbucket cannot anchor a comment
-// there).
+// new-file line number.
 func (pd *ParsedDiff) FindDiffPosition(filePath string, newLineNo int) (int, error) {
 	for _, f := range pd.Files {
 		if f.Path != filePath {
@@ -272,17 +244,9 @@ func (pd *ParsedDiff) FindDiffPosition(filePath string, newLineNo int) (int, err
 	return 0, fmt.Errorf("file %q not found in diff", filePath)
 }
 
-// GetContextForLine returns the DiffLines surrounding the given new-file line
-// number in filePath, up to contextLines lines on each side.
-//
-// The anchor is matched by NewLineNo; only non-removed lines are considered as
-// anchors so that a comment on a live line is found correctly.  The returned
-// window spans all line types (context, added, removed) within the same hunk,
-// clamped to the hunk boundaries.
-//
-// Returns (nil, false) when the file is not in the diff or the line number does
-// not appear in any hunk, allowing callers to degrade gracefully (the comment
-// is still surfaced, just without a diff snippet).
+// GetContextForLine returns DiffLines surrounding the given new-file line number,
+// up to contextLines lines on each side, clamped to hunk boundaries.
+// Returns (nil, false) when the file or line is not in the diff.
 func (pd *ParsedDiff) GetContextForLine(filePath string, newLineNo int, contextLines int) ([]DiffLine, bool) {
 	for _, f := range pd.Files {
 		if f.Path != filePath {
@@ -311,15 +275,13 @@ func (pd *ParsedDiff) GetContextForLine(filePath string, newLineNo int, contextL
 			copy(result, h.Lines[start:end])
 			return result, true
 		}
-		// File found but line not in any hunk.
 		return nil, false
 	}
 	return nil, false
 }
 
-// Summary returns a compact, Claude-readable description of the diff:
-// file paths, hunk ranges, and each changed line with its position metadata.
-// This is what gets sent to Claude for review.
+// Summary returns a compact text description of the diff: file paths, hunk ranges,
+// and each changed line with position metadata.
 func (pd *ParsedDiff) Summary() string {
 	var sb strings.Builder
 	for _, f := range pd.Files {

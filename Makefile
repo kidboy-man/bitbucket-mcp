@@ -8,7 +8,7 @@ endif
 .PHONY: build test run clean
 
 build:
-	go build -o $(BINARY) .
+	go build -o $(BINARY) ./cmd/bitbucket-mcp
 
 test:
 	go test ./...

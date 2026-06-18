@@ -1,6 +1,7 @@
-package reviewer
+package diff
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -72,10 +73,8 @@ func TestAddedLineNewLineNo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
-	// First hunk: @@ -10,7 +10,9 @@
-	// context(10), context(11), context(12), added(13), added(14), added(15), context(16), context(17)
 	hunk := pd.Files[0].Hunks[0]
-	addedLines := make([]DiffLine, 0)
+	var addedLines []DiffLine
 	for _, l := range hunk.Lines {
 		if l.Type == LineAdded {
 			addedLines = append(addedLines, l)
@@ -84,7 +83,6 @@ func TestAddedLineNewLineNo(t *testing.T) {
 	if len(addedLines) != 3 {
 		t.Fatalf("expected 3 added lines in hunk 0, got %d", len(addedLines))
 	}
-	// Verify exact new file line numbers
 	expected := []int{13, 14, 15}
 	for i, l := range addedLines {
 		if l.NewLineNo != expected[i] {
@@ -116,8 +114,6 @@ func TestFindDiffPosition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
-
-	// Find an added line — should succeed.
 	for _, f := range pd.Files {
 		for _, h := range f.Hunks {
 			for _, l := range h.Lines {
@@ -129,7 +125,7 @@ func TestFindDiffPosition(t *testing.T) {
 					if pos != l.DiffPosition {
 						t.Errorf("position mismatch: got %d, want %d", pos, l.DiffPosition)
 					}
-					return // one check is enough
+					return
 				}
 			}
 		}
@@ -159,7 +155,7 @@ func TestFindDiffPositionUnknownFile(t *testing.T) {
 }
 
 func TestNewFile(t *testing.T) {
-	diff := `diff --git a/pkg/cache/redis.go b/pkg/cache/redis.go
+	d := `diff --git a/pkg/cache/redis.go b/pkg/cache/redis.go
 new file mode 100644
 --- /dev/null
 +++ b/pkg/cache/redis.go
@@ -168,7 +164,7 @@ new file mode 100644
 +
 +// TODO: implement
 `
-	pd, err := Parse(diff)
+	pd, err := Parse(d)
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
@@ -178,7 +174,7 @@ new file mode 100644
 }
 
 func TestRenamedFile(t *testing.T) {
-	diff := `diff --git a/old/path.go b/new/path.go
+	d := `diff --git a/old/path.go b/new/path.go
 rename from old/path.go
 rename to new/path.go
 --- a/old/path.go
@@ -188,7 +184,7 @@ rename to new/path.go
 -// old
 +// new
 `
-	pd, err := Parse(diff)
+	pd, err := Parse(d)
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
@@ -220,7 +216,6 @@ func TestGetContextForLine(t *testing.T) {
 		wantLen      int
 	}{
 		{
-			// anchor at index 4 in hunk 0 (9 lines total): start=2, end=7 → 5 lines
 			name:         "middle of hunk returns symmetric window",
 			filePath:     file,
 			newLineNo:    14,
@@ -229,7 +224,6 @@ func TestGetContextForLine(t *testing.T) {
 			wantLen:      5,
 		},
 		{
-			// anchor at index 0: start=0, end=min(9,6)=6 → 6 lines
 			name:         "near start of hunk clips to beginning",
 			filePath:     file,
 			newLineNo:    10,
@@ -238,7 +232,6 @@ func TestGetContextForLine(t *testing.T) {
 			wantLen:      6,
 		},
 		{
-			// anchor at index 8 (last): start=max(0,3)=3, end=9 → 6 lines
 			name:         "near end of hunk clips to end",
 			filePath:     file,
 			newLineNo:    18,
@@ -247,7 +240,6 @@ func TestGetContextForLine(t *testing.T) {
 			wantLen:      6,
 		},
 		{
-			// anchor at index 4, contextLines=1: start=3, end=6 → 3 lines
 			name:         "contextLines=1 returns exactly 3 lines",
 			filePath:     file,
 			newLineNo:    14,
@@ -286,7 +278,6 @@ func TestGetContextForLine(t *testing.T) {
 			if len(lines) != tc.wantLen {
 				t.Errorf("len=%d, want %d", len(lines), tc.wantLen)
 			}
-			// Anchor must be present in the returned window.
 			hasAnchor := false
 			for _, l := range lines {
 				if l.NewLineNo == tc.newLineNo {
@@ -297,7 +288,6 @@ func TestGetContextForLine(t *testing.T) {
 			if !hasAnchor {
 				t.Errorf("anchor line %d not found in result window", tc.newLineNo)
 			}
-			// DiffPosition values must be positive (non-zero).
 			for _, l := range lines {
 				if l.DiffPosition <= 0 {
 					t.Errorf("line with DiffPosition %d — expected > 0", l.DiffPosition)
@@ -313,23 +303,10 @@ func TestSummaryContainsDiffPos(t *testing.T) {
 		t.Fatalf("Parse error: %v", err)
 	}
 	summary := pd.Summary()
-	if !contains(summary, "[diffPos:") {
+	if !strings.Contains(summary, "[diffPos:") {
 		t.Error("Summary missing diffPos annotations")
 	}
-	if !contains(summary, "internal/handler/user.go") {
+	if !strings.Contains(summary, "internal/handler/user.go") {
 		t.Error("Summary missing file path")
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsStr(s, sub))
-}
-
-func containsStr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
