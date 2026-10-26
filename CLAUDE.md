@@ -117,5 +117,5 @@ make test
 ## Known gaps
 
 - `get_pr` legacy output can still be large for very large PRs.
-- Success-path diff response reads are unbounded before parsing.
+- Success responses are bounded after decompression: 8 MiB per JSON response, 32 MiB per paginated list, and 16 MiB per diff. Oversized responses fail without partial review data.
 - `ParseURL` assumes Bitbucket Cloud, not self-hosted Bitbucket Server.

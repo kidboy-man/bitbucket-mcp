@@ -4,11 +4,15 @@
 
 ## Build
 
+Use Go 1.26.10 or newer on a supported, security-patched release line.
+
 ```bash
 make build
+go version -m ./bitbucket-mcp
 ```
 
-This creates `./bitbucket-mcp`.
+This creates `./bitbucket-mcp`. Confirm its embedded Go and MCP SDK versions after
+updating dependencies, then restart the MCP client to load the rebuilt binary.
 
 ## Quick install
 

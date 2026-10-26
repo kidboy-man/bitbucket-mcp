@@ -14,8 +14,11 @@ import (
 )
 
 const defaultBaseURL = "https://api.bitbucket.org/2.0"
-const maxBodyRead = 64 * 1024  // 64 KB error body guard
+const maxBodyRead = 64 * 1024 // 64 KB error body guard
 const maxPaginationPages = 100
+const maxJSONBodyRead = 8 * 1024 * 1024
+const maxPaginationBodyRead = 32 * 1024 * 1024
+const maxDiffBodyRead = 16 * 1024 * 1024
 
 // Client is an authenticated Bitbucket Cloud REST API client.
 type Client struct {
@@ -52,6 +55,23 @@ func NewClient(workspace, username, token string, opts ...Option) *Client {
 	for _, o := range opts {
 		o(c)
 	}
+	// Do not change the caller's client or weaken its redirect policy.
+	httpClient := *c.http
+	checkRedirect := httpClient.CheckRedirect
+	httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := c.validateDestination(req.URL); err != nil {
+			return err
+		}
+		if checkRedirect != nil {
+			if err := checkRedirect(req, via); err != nil {
+				return err
+			}
+		} else if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return c.validateDestination(req.URL)
+	}
+	c.http = &httpClient
 	return c
 }
 
@@ -113,9 +133,68 @@ func (c *Client) prBase(ref PullRequestRef) string {
 
 // --- Core HTTP helper -------------------------------------------------------
 
+func (c *Client) validateDestination(destination *url.URL) error {
+	base, err := url.Parse(c.baseURL)
+	if err != nil || base.Hostname() == "" || (base.Scheme != "https" && base.Scheme != "http") || base.User != nil || base.Fragment != "" {
+		return fmt.Errorf("invalid API base URL")
+	}
+	if destination.User != nil || destination.Fragment != "" || destination.Opaque != "" ||
+		destination.Scheme != base.Scheme || !strings.EqualFold(destination.Hostname(), base.Hostname()) ||
+		effectivePort(destination) != effectivePort(base) {
+		return fmt.Errorf("request destination must match configured API origin without userinfo or fragment")
+	}
+	return nil
+}
+
+func effectivePort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	return "80"
+}
+
+func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	u, err := url.Parse(path)
+	if err != nil {
+		return nil, fmt.Errorf("invalid request destination")
+	}
+	reqURL := path
+	if !u.IsAbs() && u.Host == "" {
+		reqURL = c.baseURL + path
+	}
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("building request: %w", err)
+	}
+	if err := c.validateDestination(req.URL); err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth(c.username, c.token)
+	return req, nil
+}
+
+func readBoundedBody(body io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("response exceeds %d byte limit", limit)
+	}
+	return b, nil
+}
+
 // do executes an authenticated HTTP request. body may be nil for GET/DELETE.
 // out receives JSON-decoded response body on 2xx; may be nil to discard.
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
+	remaining := int64(maxJSONBodyRead)
+	return c.doWithBudget(ctx, method, path, body, out, &remaining)
+}
+
+func (c *Client) doWithBudget(ctx context.Context, method, path string, body any, out any, remaining *int64) error {
 	var reqBody io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -125,19 +204,10 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		reqBody = bytes.NewReader(b)
 	}
 
-	// path may be a full URL (pagination next) or a relative path.
-	var reqURL string
-	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
-		reqURL = path
-	} else {
-		reqURL = c.baseURL + path
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, reqBody)
+	req, err := c.newRequest(ctx, method, path, reqBody)
 	if err != nil {
-		return fmt.Errorf("building request: %w", err)
+		return err
 	}
-	req.SetBasicAuth(c.username, c.token)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -162,8 +232,13 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 		}
 	}
 
+	b, err := readBoundedBody(resp.Body, min(int64(maxJSONBodyRead), *remaining))
+	if err != nil {
+		return err
+	}
+	*remaining -= int64(len(b))
 	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		if err := json.Unmarshal(b, out); err != nil {
 			return fmt.Errorf("decoding response from %s: %w", path, err)
 		}
 	}
@@ -182,19 +257,20 @@ func getAllPagesTyped[T any](ctx context.Context, c *Client, path string) ([]T, 
 	seen := map[string]bool{}
 	next := path
 	pages := 0
+	remaining := int64(maxPaginationBodyRead)
 
 	for next != "" {
 		if pages >= maxPaginationPages {
-			return result, fmt.Errorf("pagination exceeded %d pages", maxPaginationPages)
+			return nil, fmt.Errorf("pagination exceeded %d pages", maxPaginationPages)
 		}
 		if seen[next] {
-			return result, fmt.Errorf("pagination detected repeated next URL: %q", next)
+			return nil, fmt.Errorf("pagination detected repeated next URL")
 		}
 		seen[next] = true
 		pages++
 
 		var p page[T]
-		if err := c.do(ctx, http.MethodGet, next, nil, &p); err != nil {
+		if err := c.doWithBudget(ctx, http.MethodGet, next, nil, &p, &remaining); err != nil {
 			return nil, err
 		}
 		result = append(result, p.Values...)
@@ -262,12 +338,10 @@ func (c *Client) GetPullRequestDiff(ctx context.Context, prURL string) (string, 
 	}
 
 	// Diff endpoint returns text/plain, not JSON — use raw request.
-	reqURL := c.baseURL + c.prBase(ref) + "/diff"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	req, err := c.newRequest(ctx, http.MethodGet, c.prBase(ref)+"/diff", nil)
 	if err != nil {
 		return "", fmt.Errorf("building diff request: %w", err)
 	}
-	req.SetBasicAuth(c.username, c.token)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -280,7 +354,7 @@ func (c *Client) GetPullRequestDiff(ctx context.Context, prURL string) (string, 
 		return "", &APIError{StatusCode: resp.StatusCode, Path: c.prBase(ref) + "/diff", Body: string(b)}
 	}
 
-	b, err := io.ReadAll(resp.Body)
+	b, err := readBoundedBody(resp.Body, maxDiffBodyRead)
 	if err != nil {
 		return "", fmt.Errorf("reading diff response: %w", err)
 	}
@@ -427,8 +501,8 @@ func (c *Client) ListPullRequestTasks(ctx context.Context, prURL string) ([]Task
 	}
 
 	type raw struct {
-		ID    int    `json:"id"`
-		State string `json:"state"`
+		ID      int    `json:"id"`
+		State   string `json:"state"`
 		Content struct {
 			Raw string `json:"raw"`
 		} `json:"content"`
@@ -482,8 +556,8 @@ func (c *Client) CreatePullRequestTask(ctx context.Context, prURL string, input 
 	}
 
 	var v struct {
-		ID    int    `json:"id"`
-		State string `json:"state"`
+		ID      int    `json:"id"`
+		State   string `json:"state"`
 		Content struct {
 			Raw string `json:"raw"`
 		} `json:"content"`
@@ -519,8 +593,8 @@ func (c *Client) UpdatePullRequestTask(ctx context.Context, prURL string, taskID
 	}
 
 	var v struct {
-		ID    int    `json:"id"`
-		State string `json:"state"`
+		ID      int    `json:"id"`
+		State   string `json:"state"`
 		Content struct {
 			Raw string `json:"raw"`
 		} `json:"content"`
