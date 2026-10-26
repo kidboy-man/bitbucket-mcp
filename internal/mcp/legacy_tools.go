@@ -53,7 +53,7 @@ func registerLegacyTools(server *sdkmcp.Server, svc *review.Service) {
 // --- input/output types -----------------------------------------------------
 
 type getPRInput struct {
-	PRURL string `json:"pr_url" jsonschema:"description=Full Bitbucket PR URL"`
+	PRURL string `json:"pr_url" jsonschema:"Full Bitbucket PR URL"`
 }
 
 type getPROutput struct {
@@ -95,7 +95,7 @@ type lineDiff struct {
 }
 
 type prURLInput struct {
-	PRURL string `json:"pr_url" jsonschema:"description=Full Bitbucket PR URL"`
+	PRURL string `json:"pr_url" jsonschema:"Full Bitbucket PR URL"`
 }
 
 type listCommentsOutput struct {
@@ -114,7 +114,7 @@ type commentOut struct {
 type postCommentInput struct {
 	PRURL     string `json:"pr_url"`
 	File      string `json:"file"`
-	NewLineNo int    `json:"new_line_no" jsonschema:"description=new_line_no from get_pr output"`
+	NewLineNo int    `json:"new_line_no" jsonschema:"new_line_no from get_pr output"`
 	Body      string `json:"body"`
 }
 
