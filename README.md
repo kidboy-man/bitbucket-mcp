@@ -8,7 +8,7 @@ The server communicates over **stdio using JSON-RPC 2.0**, the standard MCP tran
 
 ## Prerequisites
 
-- Go 1.22+
+- Go 1.26.10 or newer, using a supported Go release with current security patches
 - A Bitbucket Cloud account
 - A [Bitbucket API Token](https://id.atlassian.com/manage-profile/security/api-tokens) with scopes:
   - `pullrequest` (read)
@@ -20,6 +20,7 @@ The server communicates over **stdio using JSON-RPC 2.0**, the standard MCP tran
 git clone https://github.com/kidboy-man/bitbucket-mcp.git
 cd bitbucket-mcp
 make build
+go version -m ./bitbucket-mcp
 ```
 
 This produces a `bitbucket-mcp` binary in the project root.
@@ -138,4 +139,11 @@ make build   # compile
 make clean   # remove binary
 ```
 
-No external dependencies — stdlib only.
+Uses the official MCP Go SDK. Dependency versions are recorded in `go.mod` and `go.sum`.
+
+Authenticated requests and redirects stay on the configured Bitbucket API origin.
+Success responses are limited to 8 MiB per JSON response, 32 MiB across a paginated
+list, and 16 MiB per diff, measured after decompression. Oversized responses return
+errors without partial review data. The SDK's default inbound MCP frame limit is
+16 MiB. Rebuild and restart the MCP client after security updates; changing source
+dependencies does not update an already-running binary.

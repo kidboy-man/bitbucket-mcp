@@ -26,4 +26,4 @@ go.work.sum
 *.env
 
 # Build output
-bitbucket-mcp
+/bitbucket-mcp
