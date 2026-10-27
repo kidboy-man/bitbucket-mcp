@@ -188,7 +188,9 @@ func readBoundedBody(body io.Reader, limit int64) ([]byte, error) {
 }
 
 // do executes an authenticated HTTP request. body may be nil for GET/DELETE.
-// out receives JSON-decoded response body on 2xx; may be nil to discard.
+// out receives JSON-decoded response body on 2xx. A nil out means the 2xx body
+// is neither read nor size-checked, so a write that completed is never
+// reported as failed.
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
 	remaining := int64(maxJSONBodyRead)
 	return c.doWithBudget(ctx, method, path, body, out, &remaining)
@@ -232,15 +234,17 @@ func (c *Client) doWithBudget(ctx context.Context, method, path string, body any
 		}
 	}
 
+	if out == nil {
+		return nil
+	}
+
 	b, err := readBoundedBody(resp.Body, min(int64(maxJSONBodyRead), *remaining))
 	if err != nil {
 		return err
 	}
 	*remaining -= int64(len(b))
-	if out != nil {
-		if err := json.Unmarshal(b, out); err != nil {
-			return fmt.Errorf("decoding response from %s: %w", path, err)
-		}
+	if err := json.Unmarshal(b, out); err != nil {
+		return fmt.Errorf("decoding response from %s: %w", path, err)
 	}
 	return nil
 }

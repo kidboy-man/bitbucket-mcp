@@ -248,3 +248,44 @@ func TestOversizedResponseReadsOnlyLimitPlusOne(t *testing.T) {
 		t.Fatalf("result=%v err=%v bytes read=%d", got, err, body.read)
 	}
 }
+
+type failingBody struct{ sent bool }
+
+func (b *failingBody) Read(p []byte) (int, error) {
+	if b.sent {
+		return 0, errors.New("connection reset")
+	}
+	b.sent = true
+	return copy(p, "{"), nil
+}
+
+func TestWritesDiscardingResponseBodyDoNotFailOnSuccessBody(t *testing.T) {
+	writes := []struct {
+		name string
+		call func(*Client) error
+	}{
+		{"approve", func(c *Client) error { return c.ApprovePullRequest(context.Background(), securityPRURL) }},
+		{"request changes", func(c *Client) error { return c.RequestChanges(context.Background(), securityPRURL) }},
+		{"resolve thread", func(c *Client) error { return c.ResolveCommentThread(context.Background(), securityPRURL, 1) }},
+		{"reopen thread", func(c *Client) error { return c.ReopenCommentThread(context.Background(), securityPRURL, 1) }},
+	}
+	bodies := []struct {
+		name string
+		body func() io.ReadCloser
+	}{
+		{"oversized", func() io.ReadCloser { return io.NopCloser(strings.NewReader(strings.Repeat(" ", maxJSONBodyRead+1))) }},
+		{"read error", func() io.ReadCloser { return io.NopCloser(&failingBody{}) }},
+	}
+	for _, w := range writes {
+		for _, b := range bodies {
+			t.Run(w.name+"/"+b.name, func(t *testing.T) {
+				client := NewClient("myworkspace", "user", "token", WithHTTPClient(&http.Client{Transport: securityTransport(func(r *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: 200, Header: make(http.Header), Body: b.body(), Request: r, ContentLength: -1}, nil
+				})}))
+				if err := w.call(client); err != nil {
+					t.Fatalf("completed write reported as failed: %v", err)
+				}
+			})
+		}
+	}
+}
